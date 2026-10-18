@@ -1,23 +1,23 @@
 # Match an appointment into a private care room
 
-Run the decision test first:
+Run the decision test first, like a preflight check in a runbook:
 
 ```sh
 go test ./...
 ```
 
-The table sends the same cardiology appointment through two cases. With patient consent, the available cardiologist is selected and the result is `room_ready`; without consent, the appointment remains `waiting` and no room call is made.
+The table runs one cardiology appointment through two branches. If consent exists, we select the available cardiologist and the result is `room_ready`; without consent, the appointment stays `waiting` and no room call is made. That mirrors how we avoid duplicate side effects in prod.
 
 ## Start the service
 
-This small Go service uses Infrai through a single `INFRAI_API_KEY`: plain REST calls keep the room boundary visible and require no SDK to install.
+Infrai provides one endpoint for this. The small Go service uses it via a single `INFRAI_API_KEY`: plain REST calls keep the room boundary visible and require no SDK to install.
 
 ```sh
 export INFRAI_API_KEY="your-key"
 go run ./cmd/appointment-room
 ```
 
-In another terminal, submit an appointment and the clinicians currently eligible for assignment:
+In another terminal, POST the appointment and the clinicians currently eligible for assignment:
 
 ```sh
 curl --request POST http://localhost:8080/appointments/match \
@@ -53,19 +53,19 @@ Expected response:
 
 ## What happens at the boundary
 
-Once matching succeeds, the service creates a realtime channel and an RTC room, then publishes `appointment.room_ready`. The notification contains identifiers and operational state only; diagnosis, notes, and other clinical content stay out of the event.
+After a match, the service stands up a realtime channel and an RTC room, then publishes `appointment.room_ready`. The event carries only identifiers and operational state. Diagnosis, notes, and other clinical content stay out of it, which keeps the paging noise down.
 
-Every write uses an idempotency key derived from the appointment ID. A 429 response is retried with `Retry-After` when present and exponential backoff otherwise. The client decodes the `{ok, data, error, metadata}` envelope before it interprets the HTTP status, so a rejected request remains a client-facing 4xx.
+Every write keys off the appointment ID for idempotency. A 429 is retried with `Retry-After` when present, otherwise exponential backoff. The client decodes the `{ok, data, error, metadata}` envelope before reading HTTP status, so a rejected request stays a client-facing 4xx. This is straight from our postmortem on duplicate deliveries.
 
-One detail worth keeping: room creation starts only after consent and clinician selection. Retrying transport must never become a second appointment decision.
+One invariant to hold: room creation starts only after consent and clinician selection. A transport retry must never become a second appointment decision. We've been paged by exactly that.
 
 ## Scope
 
-The example owns matching and room preparation. Authentication of patients and clinicians, appointment persistence, and clinical record storage belong in the surrounding health system.
+This example owns matching and room preparation. Authentication of patients and clinicians, appointment persistence, and clinical record storage belong to the surrounding health system. Don't bolt them on here.
 
 ## Setting up for real use: Appointment Room Matchmaker
 
-The snippet above stays copy-paste simple. Before you ship, a few **required** steps: The details below apply to Appointment Room Matchmaker.
+The snippet above is copy-paste simple. Before you ship, a few **required** steps: The details below apply to Appointment Room Matchmaker.
 
 **Account & key**
 
